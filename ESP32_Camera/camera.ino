@@ -20,8 +20,8 @@
 #define HREF_GPIO_NUM     23
 #define PCLK_GPIO_NUM     22
 
-const char* ssid = "Sutapa";
-const char* password = "sutapa4444";
+const char* ssid = "****";
+const char* password = "****";
 
 httpd_handle_t stream_httpd = NULL;
 

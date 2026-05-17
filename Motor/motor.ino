@@ -17,8 +17,8 @@ int resumeIterationsLeft = 0;    // Iterations remaining when paused
 float resumeDegPerInterval = 0;  // Degrees per interval when paused
 
 // --- Network Credentials ---
-const char* ssid = "Sutapa";
-const char* password = "sutapa4444";
+const char* ssid = "*****";
+const char* password = "*****";
 
 WebServer server(80);
 

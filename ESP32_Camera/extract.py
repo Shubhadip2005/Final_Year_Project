@@ -7,7 +7,7 @@ import platform
 
 # --- CONFIGURATION ---
 # 1. Update with your ESP32 IP
-ESP32_IP = "10.22.235.166" 
+ESP32_IP = "****" 
 STREAM_URL = f"http://{ESP32_IP}/"
 
 # 2. Tesseract Path (Updated for your MacBook Air)
