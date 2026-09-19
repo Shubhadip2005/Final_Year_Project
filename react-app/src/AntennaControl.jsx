@@ -4,15 +4,21 @@ import { ref, onValue, set } from 'firebase/database';
 import './AntennaControl.css';
 
 const AntennaControl = () => {
+  // ═══════════════════════════════════════════════════════════════════
+  // STATIC IP ADDRESSES (Always the same - no need to check Serial!)
+  // ═══════════════════════════════════════════════════════════════════
+  const MAIN_ESP32_IP = '192.168.1.50';        // Main ESP32 (Motor)
+  const ESP32_CAM_IP = '192.168.1.51';         // ESP32-CAM (Camera)
+  
   // State Management
-  const [esp32IP, setEsp32IP] = useState('');
+  const [esp32IP, setEsp32IP] = useState(MAIN_ESP32_IP);  // Automatically filled
   const [isConnected, setIsConnected] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
   const [currentAngle, setCurrentAngle] = useState(0);
   const [degreesPerMove, setDegreesPerMove] = useState(10);
   const [repeatCount, setRepeatCount] = useState(36);
   const [measurements, setMeasurements] = useState([]);
-  const [status, setStatus] = useState('Ready');
+  const [status, setStatus] = useState('Ready to connect');
   const [progress, setProgress] = useState(0);
   const [apiEndpoint, setApiEndpoint] = useState('https://antenna-ocr-api.onrender.com');
 
@@ -32,39 +38,39 @@ const AntennaControl = () => {
     return () => unsubscribe();
   }, []);
 
-  // Connect to ESP32
+  // Connect to ESP32 (uses static IP)
   const handleConnect = async () => {
-    if (!esp32IP) {
-      alert('Please enter ESP32 IP address');
-      return;
-    }
-
     try {
-      setStatus('Connecting...');
-      const response = await fetch(`http://${esp32IP}/status`, { timeout: 5000 });
+      setStatus('Connecting to 192.168.1.50...');
+      
+      // Test connection to Main ESP32
+      const response = await fetch(`http://${MAIN_ESP32_IP}/status`, { 
+        timeout: 5000 
+      });
+      
       if (response.ok) {
         setIsConnected(true);
-        setStatus('Connected ✓');
+        setStatus('✓ Connected! Static IPs: Main=192.168.1.50, Camera=192.168.1.51');
       } else {
         throw new Error('No response from ESP32');
       }
     } catch (error) {
-      setStatus('Connection Failed ✗');
-      alert(`Error: ${error.message}\nMake sure ESP32 is on and IP is correct`);
+      setStatus('✗ Connection Failed - Check WiFi and ESP32 power');
+      alert(`Error: ${error.message}\n\nMake sure:\n1. ESP32s are powered on\n2. Same WiFi network\n3. IPs: Main=192.168.1.50, Camera=192.168.1.51`);
     }
   };
 
-  // Send command to ESP32
+  // Send command to Main ESP32
   const sendCommand = async (command, angle = null) => {
     if (!isConnected) {
-      alert('Not connected to ESP32');
+      alert('Not connected to ESP32. Click "Connect" button first.');
       return;
     }
 
     try {
       const url = angle !== null 
-        ? `http://${esp32IP}/control?cmd=${command}&angle=${angle}`
-        : `http://${esp32IP}/control?cmd=${command}`;
+        ? `http://${MAIN_ESP32_IP}/rotate?angle=${angle}`
+        : `http://${MAIN_ESP32_IP}/control?cmd=${command}`;
 
       const response = await fetch(url);
       if (!response.ok) throw new Error('Command failed');
@@ -105,31 +111,31 @@ const AntennaControl = () => {
 
       const angle = (i * degreesPerMove) % 360;
       setCurrentAngle(angle);
-      setStatus(`Measuring at ${angle}°...`);
+      setStatus(`📍 Measuring at ${angle}°...`);
       setProgress(Math.round((i / repeatCount) * 100));
 
-      // Move to angle
+      // Step 1: Move to angle
       const moved = await sendCommand('rotate', angle);
       if (!moved) throw new Error(`Failed to move to ${angle}°`);
 
-      // Wait for field stabilization
-      setStatus(`Waiting 30s at ${angle}° for field stabilization...`);
+      // Step 2: Wait for field stabilization
+      setStatus(`⏳ Waiting 30s at ${angle}° for field stabilization...`);
       await new Promise((resolve) => setTimeout(resolve, 30000));
 
-      // Capture and extract
-      setStatus(`Capturing and extracting data at ${angle}°...`);
+      // Step 3: Capture and extract
+      setStatus(`📷 Capturing image at ${angle}°...`);
       const value = await captureAndExtract();
 
       if (value === null) {
         throw new Error(`Failed to extract data at ${angle}°`);
       }
 
-      // Save to Firebase
+      // Step 4: Save to Firebase
       await saveMeasurement(angle, value);
-      setStatus(`✓ Saved: ${angle}° = ${value} mA`);
+      setStatus(`✅ Saved: ${angle}° = ${value.toFixed(4)} mA`);
     }
 
-    setStatus('Measurement cycle complete!');
+    setStatus('✨ Measurement cycle complete!');
     setProgress(100);
     setIsRunning(false);
   };
@@ -137,23 +143,18 @@ const AntennaControl = () => {
   // Capture image and extract via API
   const captureAndExtract = async () => {
     try {
-      // Step 1: Tell ESP32 to capture image
-      const captureResponse = await fetch(`http://${esp32IP}/capture`);
+      // Step 1: Tell ESP32-CAM to capture image
+      const captureResponse = await fetch(`http://${ESP32_CAM_IP}/capture`);
       if (!captureResponse.ok) throw new Error('Failed to capture image');
 
-      const { imagePath } = await captureResponse.json();
+      // Step 2: Tell ESP32-CAM to extract (sends to Render API)
+      const extractResponse = await fetch(`http://${ESP32_CAM_IP}/extract`);
+      if (!extractResponse.ok) throw new Error('OCR extraction failed');
       
-      // Step 2: Send image to Render API for OCR
-      const ocrResponse = await fetch(`${apiEndpoint}/extract-ocr`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ imagePath }),
-      });
-
-      if (!ocrResponse.ok) throw new Error('OCR extraction failed');
+      const data = await extractResponse.json();
+      if (!data.success) throw new Error('Extraction returned error');
       
-      const { extractedValue } = await ocrResponse.json();
-      return parseFloat(extractedValue);
+      return parseFloat(data.extractedValue);
     } catch (error) {
       console.error('Capture/Extract error:', error);
       return null;
@@ -177,14 +178,13 @@ const AntennaControl = () => {
   // Pause measurement
   const handlePause = () => {
     setIsRunning(false);
-    setStatus('Paused');
-    sendCommand('pause');
+    setStatus('⏸ Paused');
   };
 
   // Resume measurement
   const handleResume = async () => {
     setIsRunning(true);
-    setStatus('Resuming...');
+    setStatus('▶ Resuming...');
     await runMeasurementCycle();
   };
 
@@ -193,7 +193,7 @@ const AntennaControl = () => {
     const success = await sendCommand('reset');
     if (success) {
       setCurrentAngle(0);
-      setStatus('Reset to 0° ✓');
+      setStatus('↺ Reset to 0° ✓');
     }
   };
 
@@ -232,6 +232,9 @@ const AntennaControl = () => {
       <header className="antenna-header">
         <h1>🛰️ RF Antenna Automation System</h1>
         <p>Automated Antenna Radiation Pattern Measurement</p>
+        <p style={{fontSize: '0.9rem', opacity: 0.8}}>
+          ⭐ Static IPs: Main=192.168.1.50 | Camera=192.168.1.51
+        </p>
       </header>
 
       <div className="main-content">
@@ -242,10 +245,10 @@ const AntennaControl = () => {
             <div className="input-group">
               <input
                 type="text"
-                placeholder="e.g., 192.168.1.100"
+                placeholder="192.168.1.50 (Auto-filled)"
                 value={esp32IP}
-                onChange={(e) => setEsp32IP(e.target.value)}
-                disabled={isConnected}
+                disabled={true}
+                style={{backgroundColor: '#f0f0f0', cursor: 'not-allowed'}}
               />
               <button
                 onClick={handleConnect}
@@ -256,6 +259,11 @@ const AntennaControl = () => {
               </button>
             </div>
             <p className="status-text">{status}</p>
+            <p style={{fontSize: '0.85rem', color: '#666', marginTop: '10px'}}>
+              ℹ️ IP addresses are FIXED (static). No need to check Serial Monitor every time!<br/>
+              Main ESP32: <strong>192.168.1.50</strong><br/>
+              ESP32-CAM: <strong>192.168.1.51</strong>
+            </p>
           </section>
 
           <section className="card">
@@ -283,18 +291,6 @@ const AntennaControl = () => {
                   value={repeatCount}
                   onChange={(e) => setRepeatCount(Number(e.target.value))}
                   disabled={isRunning}
-                />
-              </label>
-            </div>
-            <div className="setting-group">
-              <label>
-                API Endpoint:
-                <input
-                  type="text"
-                  value={apiEndpoint}
-                  onChange={(e) => setApiEndpoint(e.target.value)}
-                  disabled={isRunning}
-                  placeholder="https://antenna-ocr-api.onrender.com"
                 />
               </label>
             </div>
@@ -384,12 +380,17 @@ const AntennaControl = () => {
           </section>
 
           <section className="card">
-            <h2>📉 Real-time Graph</h2>
-            {measurements.length > 0 ? (
-              <canvas id="dataChart"></canvas>
-            ) : (
-              <p className="no-data">Graph will appear here once data is collected</p>
-            )}
+            <h2>📉 System Info</h2>
+            <p style={{fontSize: '0.9rem', lineHeight: '1.6'}}>
+              <strong>Main ESP32:</strong> 192.168.1.50<br/>
+              <strong>ESP32-CAM:</strong> 192.168.1.51<br/>
+              <strong>Render API:</strong> antenna-ocr-api.onrender.com<br/>
+              <strong>Database:</strong> Firebase Realtime DB<br/>
+              <br/>
+              ✨ <strong>All IPs are STATIC!</strong><br/>
+              Each time you power on, the ESP32s will have the same IPs.<br/>
+              No need to check Serial Monitor.
+            </p>
           </section>
         </div>
       </div>
