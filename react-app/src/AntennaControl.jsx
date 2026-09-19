@@ -11,7 +11,6 @@ const AntennaControl = () => {
   const ESP32_CAM_IP = '192.168.1.51';         // ESP32-CAM (Camera)
   
   // State Management
-  const [esp32IP, setEsp32IP] = useState(MAIN_ESP32_IP);  // Automatically filled
   const [isConnected, setIsConnected] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
   const [currentAngle, setCurrentAngle] = useState(0);
@@ -20,7 +19,6 @@ const AntennaControl = () => {
   const [measurements, setMeasurements] = useState([]);
   const [status, setStatus] = useState('Ready to connect');
   const [progress, setProgress] = useState(0);
-  const [apiEndpoint, setApiEndpoint] = useState('https://antenna-ocr-api.onrender.com');
 
   // Firebase: Listen to measurements
   useEffect(() => {
@@ -246,7 +244,7 @@ const AntennaControl = () => {
               <input
                 type="text"
                 placeholder="192.168.1.50 (Auto-filled)"
-                value={esp32IP}
+                value={MAIN_ESP32_IP}
                 disabled={true}
                 style={{backgroundColor: '#f0f0f0', cursor: 'not-allowed'}}
               />
