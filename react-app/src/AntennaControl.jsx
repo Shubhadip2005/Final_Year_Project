@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { db } from './firebase-config';
-import { ref, onValue, push, set } from 'firebase/database';
+import { ref, onValue, set } from 'firebase/database';
 import './AntennaControl.css';
 
 const AntennaControl = () => {
