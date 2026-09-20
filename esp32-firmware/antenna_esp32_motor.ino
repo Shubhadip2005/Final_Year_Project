@@ -30,19 +30,19 @@
 // ═════════════════════════════════════════════════════════════════════
 
 // WiFi Configuration
-const char* WIFI_SSID = "YOUR_WIFI_SSID";              // ← UPDATE THIS
-const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";      // ← UPDATE THIS
+const char* WIFI_SSID = "OPPO Reno10 Pro 5G";              // ← UPDATE THIS
+const char* WIFI_PASSWORD = "12233344445";      // ← UPDATE THIS
 
 // STATIC IP FOR MAIN ESP32 (THIS DEVICE)
 // This IP will ALWAYS be the same - no need to check Serial Monitor!
-IPAddress staticIP(192, 168, 1, 50);                   // Fixed IP
-IPAddress gateway(192, 168, 1, 1);                     // Your router IP
-IPAddress subnet(255, 255, 255, 0);                    // Subnet mask
-IPAddress primaryDNS(8, 8, 8, 8);                      // Google DNS
-IPAddress secondaryDNS(8, 8, 4, 4);                    // Google DNS
+IPAddress staticIP(10, 135, 98, 50);       // Fixed IP
+IPAddress gateway(10, 135, 98, 1);         // Your router IP
+IPAddress subnet(255, 255, 255, 0);        // Subnet mask
+IPAddress primaryDNS(10, 135, 98, 5);      // Google DNS
+IPAddress secondaryDNS(8, 8, 8, 8);        // Google DNS
 
 // ESP32-CAM Module (separate device on same network)
-const char* ESP32_CAM_IP = "192.168.1.51";             // Fixed IP for camera
+const char* ESP32_CAM_IP = "10.135.98.51";             // Fixed IP for camera
 
 // Render OCR API
 const char* OCR_API_URL = "https://antenna-ocr-api.onrender.com/extract-ocr";
@@ -57,7 +57,7 @@ const char* FIREBASE_AUTH = "your-firebase-token";
 
 #define STEP_PIN 19        // GPIO 19 - Stepper STEP pulse
 #define DIR_PIN 18         // GPIO 18 - Direction control
-#define ENABLE_PIN 5       // GPIO 5  - Motor enable (active LOW)
+#define ENABLE_PIN 21      // GPIO 21 - Motor enable (active LOW) - CHANGED FROM GPIO 21
 
 // ═════════════════════════════════════════════════════════════════════
 // ⚙️ MOTOR PARAMETERS
@@ -140,7 +140,7 @@ void initializeMotor() {
   Serial.println("[MOTOR] ✓ Initialized");
   Serial.println("  STEP:   GPIO 19");
   Serial.println("  DIR:    GPIO 18");
-  Serial.println("  ENABLE: GPIO 5\n");
+  Serial.println("  ENABLE: GPIO 21\n");
 }
 
 // ═════════════════════════════════════════════════════════════════════
@@ -261,7 +261,7 @@ void handleCapture() {
   Serial.println("[CAMERA] Capture request received");
   
   // Send command to ESP32-CAM
-  const char* camURL = "http://192.168.1.XXX/capture";  // ← Use actual camera IP
+  const char* camURL = "http://10.135.98.51/capture";  // ← Use actual camera IP
   
   HTTPClient http;
   http.begin(camURL);
@@ -444,7 +444,7 @@ void printSystemInfo() {
  * MOTOR CONNECTIONS:
  * GPIO 19 (STEP)  ← Connect to A4988 STEP pin
  * GPIO 18 (DIR)   ← Connect to A4988 DIR pin
- * GPIO 5 (ENABLE) ← Connect to A4988 ENABLE pin
+ * GPIO 21 (ENABLE) ← Connect to A4988 ENABLE pin
  * GND             ← Connect to A4988 GND & ESP32 GND
  * 5V (USB)        ← Connect to A4988 VCC
  * 

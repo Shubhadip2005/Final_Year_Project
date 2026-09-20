@@ -7,8 +7,8 @@ const AntennaControl = () => {
   // ═══════════════════════════════════════════════════════════════════
   // STATIC IP ADDRESSES (Always the same - no need to check Serial!)
   // ═══════════════════════════════════════════════════════════════════
-  const MAIN_ESP32_IP = '192.168.1.50';        // Main ESP32 (Motor)
-  const ESP32_CAM_IP = '192.168.1.51';         // ESP32-CAM (Camera)
+  const MAIN_ESP32_IP = '10.135.98.50';        // Main ESP32 (Motor)
+  const ESP32_CAM_IP = '10.135.98.51';         // ESP32-CAM (Camera)
   
   // State Management
   const [isConnected, setIsConnected] = useState(false);
@@ -39,7 +39,7 @@ const AntennaControl = () => {
   // Connect to ESP32 (uses static IP)
   const handleConnect = async () => {
     try {
-      setStatus('Connecting to 192.168.1.50...');
+      setStatus('Connecting to 10.135.98.50...');
       
       // Test connection to Main ESP32
       const response = await fetch(`http://${MAIN_ESP32_IP}/status`, { 
@@ -48,13 +48,13 @@ const AntennaControl = () => {
       
       if (response.ok) {
         setIsConnected(true);
-        setStatus('✓ Connected! Static IPs: Main=192.168.1.50, Camera=192.168.1.51');
+        setStatus('✓ Connected! Static IPs: Main=10.135.98.50, Camera=10.135.98.51');
       } else {
         throw new Error('No response from ESP32');
       }
     } catch (error) {
       setStatus('✗ Connection Failed - Check WiFi and ESP32 power');
-      alert(`Error: ${error.message}\n\nMake sure:\n1. ESP32s are powered on\n2. Same WiFi network\n3. IPs: Main=192.168.1.50, Camera=192.168.1.51`);
+      alert(`Error: ${error.message}\n\nMake sure:\n1. ESP32s are powered on\n2. Same WiFi network\n3. IPs: Main=10.135.98.50, Camera=10.135.98.51`);
     }
   };
 
@@ -231,7 +231,7 @@ const AntennaControl = () => {
         <h1>🛰️ RF Antenna Automation System</h1>
         <p>Automated Antenna Radiation Pattern Measurement</p>
         <p style={{fontSize: '0.9rem', opacity: 0.8}}>
-          ⭐ Static IPs: Main=192.168.1.50 | Camera=192.168.1.51
+          ⭐ Static IPs: Main=10.135.98.50 | Camera=10.135.98.51
         </p>
       </header>
 
@@ -243,7 +243,7 @@ const AntennaControl = () => {
             <div className="input-group">
               <input
                 type="text"
-                placeholder="192.168.1.50 (Auto-filled)"
+                placeholder="10.135.98.50 (Auto-filled)"
                 value={MAIN_ESP32_IP}
                 disabled={true}
                 style={{backgroundColor: '#f0f0f0', cursor: 'not-allowed'}}
@@ -259,8 +259,8 @@ const AntennaControl = () => {
             <p className="status-text">{status}</p>
             <p style={{fontSize: '0.85rem', color: '#666', marginTop: '10px'}}>
               ℹ️ IP addresses are FIXED (static). No need to check Serial Monitor every time!<br/>
-              Main ESP32: <strong>192.168.1.50</strong><br/>
-              ESP32-CAM: <strong>192.168.1.51</strong>
+              Main ESP32: <strong>10.135.98.50</strong><br/>
+              ESP32-CAM: <strong>10.135.98.51</strong>
             </p>
           </section>
 
@@ -380,8 +380,8 @@ const AntennaControl = () => {
           <section className="card">
             <h2>📉 System Info</h2>
             <p style={{fontSize: '0.9rem', lineHeight: '1.6'}}>
-              <strong>Main ESP32:</strong> 192.168.1.50<br/>
-              <strong>ESP32-CAM:</strong> 192.168.1.51<br/>
+              <strong>Main ESP32:</strong> 10.135.98.50<br/>
+              <strong>ESP32-CAM:</strong> 10.135.98.51<br/>
               <strong>Render API:</strong> antenna-ocr-api.onrender.com<br/>
               <strong>Database:</strong> Firebase Realtime DB<br/>
               <br/>

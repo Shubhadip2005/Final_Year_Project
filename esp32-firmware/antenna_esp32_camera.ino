@@ -3,69 +3,53 @@
  * RF ANTENNA AUTOMATION SYSTEM - ESP32-CAM MODULE
  * ═════════════════════════════════════════════════════════════════════
  * 
- * This code runs on the ESP32-CAM module (SEPARATE device from motor ESP32)
- * 
- * Responsibilities:
- * - Capture images from camera
- * - Store images temporarily
- * - Send images to Render OCR API
- * - Return extracted readings
- * 
- * Communication:
- * Main ESP32 → sends HTTP GET /capture → This module captures image
- * Main ESP32 → sends HTTP GET /extract → This module sends to Render
+ * Based on WORKING camera code + API endpoints for automation system
+ * Uses proven camera initialization that works!
  * 
  * ═════════════════════════════════════════════════════════════════════
  */
 
+#include "esp_camera.h"
 #include <WiFi.h>
 #include <WebServer.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
-#include "esp_camera.h"
-#include <SPIFFS.h>
 
 // ═════════════════════════════════════════════════════════════════════
 // ⚙️ CONFIGURATION
 // ═════════════════════════════════════════════════════════════════════
 
-// WiFi Configuration (SAME NETWORK as main ESP32)
-const char* WIFI_SSID = "YOUR_WIFI_SSID";
-const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
+const char* WIFI_SSID = "OPPO Reno10 Pro 5G";
+const char* WIFI_PASSWORD = "12233344445";
 
-// STATIC IP FOR ESP32-CAM (THIS DEVICE)
-// This IP will ALWAYS be the same - no need to check Serial Monitor!
-IPAddress staticIP(192, 168, 1, 51);                   // Fixed IP for camera
-IPAddress gateway(192, 168, 1, 1);                     // Your router IP
-IPAddress subnet(255, 255, 255, 0);                    // Subnet mask
-IPAddress primaryDNS(8, 8, 8, 8);                      // Google DNS
-IPAddress secondaryDNS(8, 8, 4, 4);                    // Google DNS
-
-// Render OCR API Endpoint
+// STATIC IP FOR ESP32-CAM
+IPAddress staticIP(10, 135, 98, 51);      
+IPAddress gateway(10, 135, 98, 1);         
+IPAddress subnet(255, 255, 255, 0);
+IPAddress primaryDNS(10, 135, 98, 5);
+IPAddress secondaryDNS(8, 8, 8, 8);
 const char* OCR_API_URL = "https://antenna-ocr-api.onrender.com/extract-ocr";
 
 // ═════════════════════════════════════════════════════════════════════
-// 📷 CAMERA PIN CONFIGURATION (FIXED FOR ESP32-CAM)
+// 📷 CAMERA PIN CONFIGURATION (AI THINKER ESP32-CAM)
 // ═════════════════════════════════════════════════════════════════════
 
-#define PWDN_GPIO_NUM 32
-#define RESET_GPIO_NUM -1
-#define XCLK_GPIO_NUM 0
-#define SIOD_GPIO_NUM 26
-#define SIOC_GPIO_NUM 27
-
-#define Y9_GPIO_NUM 35
-#define Y8_GPIO_NUM 34
-#define Y7_GPIO_NUM 39
-#define Y6_GPIO_NUM 36
-#define Y5_GPIO_NUM 21
-#define Y4_GPIO_NUM 19
-#define Y3_GPIO_NUM 18
-#define Y2_GPIO_NUM 5
-
-#define VSYNC_GPIO_NUM 25
-#define HREF_GPIO_NUM 23
-#define PCLK_GPIO_NUM 22
+#define PWDN_GPIO_NUM     32
+#define RESET_GPIO_NUM    -1
+#define XCLK_GPIO_NUM      0
+#define SIOD_GPIO_NUM     26
+#define SIOC_GPIO_NUM     27
+#define Y9_GPIO_NUM       35
+#define Y8_GPIO_NUM       34
+#define Y7_GPIO_NUM       39
+#define Y6_GPIO_NUM       36
+#define Y5_GPIO_NUM       21
+#define Y4_GPIO_NUM       19
+#define Y3_GPIO_NUM       18
+#define Y2_GPIO_NUM        5
+#define VSYNC_GPIO_NUM    25
+#define HREF_GPIO_NUM     23
+#define PCLK_GPIO_NUM     22
 
 // ═════════════════════════════════════════════════════════════════════
 // 🖥️ WEB SERVER
@@ -74,13 +58,10 @@ const char* OCR_API_URL = "https://antenna-ocr-api.onrender.com/extract-ocr";
 WebServer server(80);
 
 // ═════════════════════════════════════════════════════════════════════
-// 📊 STATE VARIABLES
+// 📊 STATE
 // ═════════════════════════════════════════════════════════════════════
 
 String systemStatus = "Initializing";
-uint8_t* lastImageBuffer = NULL;
-size_t lastImageSize = 0;
-String lastImagePath = "/image.jpg";
 float lastExtractedValue = 0.0;
 
 // ═════════════════════════════════════════════════════════════════════
@@ -92,25 +73,21 @@ void setup() {
   delay(2000);
   
   Serial.println("\n\n╔════════════════════════════════════════════════════╗");
-  Serial.println("║  📷 ESP32-CAM MODULE - STARTUP                   ║");
-  Serial.println("║  (Controlled by Main ESP32)                      ║");
+  Serial.println("║  📷 ESP32-CAM MODULE - PRODUCTION VERSION         ║");
+  Serial.println("║  (Based on proven working code)                   ║");
   Serial.println("╚════════════════════════════════════════════════════╝\n");
   
-  // Initialize Camera
+  // Initialize Camera (PROVEN WORKING CONFIG)
   initializeCamera();
   
-  // Initialize SPIFFS (file storage)
-  initializeSPIFFS();
-  
-  // Connect WiFi
+  // Connect WiFi with Static IP
   connectToWiFi();
   
-  // Setup Web Server
+  // Setup Web Server endpoints
   setupWebServer();
   
-  // Start server
   server.begin();
-  Serial.println("[SERVER] Camera API server started on port 80");
+  Serial.println("[SERVER] ✓ Camera API server started on port 80");
   Serial.println("[SYSTEM] Ready to capture and extract!\n");
 }
 
@@ -120,11 +97,11 @@ void setup() {
 
 void loop() {
   server.handleClient();
-  delay(10);
+  delay(1);
 }
 
 // ═════════════════════════════════════════════════════════════════════
-// 📷 CAMERA INITIALIZATION
+// 📷 CAMERA INITIALIZATION (PROVEN WORKING)
 // ═════════════════════════════════════════════════════════════════════
 
 void initializeCamera() {
@@ -132,50 +109,41 @@ void initializeCamera() {
   
   camera_config_t config;
   config.ledc_channel = LEDC_CHANNEL_0;
-  config.ledc_freq = 20000000;
-  config.pin_d7 = Y9_GPIO_NUM;
-  config.pin_d6 = Y8_GPIO_NUM;
-  config.pin_d5 = Y7_GPIO_NUM;
-  config.pin_d4 = Y6_GPIO_NUM;
-  config.pin_d3 = Y5_GPIO_NUM;
-  config.pin_d2 = Y4_GPIO_NUM;
-  config.pin_d1 = Y3_GPIO_NUM;
+  config.ledc_timer = LEDC_TIMER_0;       // ← IMPORTANT: This was missing!
   config.pin_d0 = Y2_GPIO_NUM;
+  config.pin_d1 = Y3_GPIO_NUM;
+  config.pin_d2 = Y4_GPIO_NUM;
+  config.pin_d3 = Y5_GPIO_NUM;
+  config.pin_d4 = Y6_GPIO_NUM;
+  config.pin_d5 = Y7_GPIO_NUM;
+  config.pin_d6 = Y8_GPIO_NUM;
+  config.pin_d7 = Y9_GPIO_NUM;
+  config.pin_xclk = XCLK_GPIO_NUM;
+  config.pin_pclk = PCLK_GPIO_NUM;
   config.pin_vsync = VSYNC_GPIO_NUM;
   config.pin_href = HREF_GPIO_NUM;
   config.pin_sscb_sda = SIOD_GPIO_NUM;
   config.pin_sscb_scl = SIOC_GPIO_NUM;
   config.pin_pwdn = PWDN_GPIO_NUM;
   config.pin_reset = RESET_GPIO_NUM;
-  config.xclk_freq_hz = 10000000;
+  config.xclk_freq_hz = 20000000;         // 20 MHz - works well
   config.pixel_format = PIXFORMAT_JPEG;
-  config.frame_size = FRAMESIZE_SVGA;  // 800x600
-  config.jpeg_quality = 10;            // 0-63, lower = better quality
+  config.frame_size = FRAMESIZE_VGA;      // 640x480 - good balance
+  config.jpeg_quality = 12;               // Good quality
   config.fb_count = 1;
   
+  Serial.println("[CAMERA] Calling esp_camera_init()...");
+  
   esp_err_t err = esp_camera_init(&config);
+  
   if (err != ESP_OK) {
-    Serial.printf("[CAMERA] Init failed with error 0x%x\n", err);
+    Serial.printf("[CAMERA] ✗ Init failed with error 0x%x\n", err);
     systemStatus = "Camera Init Failed";
     return;
   }
   
   Serial.println("[CAMERA] ✓ Initialized successfully!");
   systemStatus = "Ready";
-}
-
-// ═════════════════════════════════════════════════════════════════════
-// 💾 SPIFFS INITIALIZATION
-// ═════════════════════════════════════════════════════════════════════
-
-void initializeSPIFFS() {
-  Serial.println("[SPIFFS] Initializing file system...");
-  
-  if (!SPIFFS.begin(true)) {
-    Serial.println("[SPIFFS] Failed to mount - will create new");
-  } else {
-    Serial.println("[SPIFFS] ✓ Mounted successfully");
-  }
 }
 
 // ═════════════════════════════════════════════════════════════════════
@@ -186,9 +154,8 @@ void connectToWiFi() {
   Serial.println("[WIFI] Configuring static IP...");
   Serial.println("[WIFI] Static IP: 192.168.1.51 (ALWAYS the same!)");
   
-  // Configure static IP BEFORE connecting
   if (!WiFi.config(staticIP, gateway, subnet, primaryDNS, secondaryDNS)) {
-    Serial.println("[WIFI] ✗ Failed to configure static IP!");
+    Serial.println("[WIFI] ✗ Failed to configure static IP");
   }
   
   Serial.println("[WIFI] Connecting to WiFi...");
@@ -212,25 +179,24 @@ void connectToWiFi() {
     Serial.println(WiFi.localIP());
     Serial.println("[WIFI] ⭐ IP is ALWAYS 192.168.1.51");
     Serial.println("[WIFI] ⭐ No need to check Serial Monitor!");
+    systemStatus = "Connected";
   } else {
-    Serial.println("[WIFI] ✗ Connection failed!");
+    Serial.println("[WIFI] ✗ Connection failed");
     systemStatus = "WiFi Failed";
   }
   Serial.println();
 }
 
 // ═════════════════════════════════════════════════════════════════════
-// 🌐 WEB SERVER - API ENDPOINTS
+// 🌐 WEB SERVER SETUP
 // ═════════════════════════════════════════════════════════════════════
 
 void setupWebServer() {
-  Serial.println("[SERVER] Setting up API endpoints...");
-  
+  Serial.println("[SERVER] Setting up endpoints...");
   server.on("/status", HTTP_GET, handleStatus);
   server.on("/capture", HTTP_GET, handleCapture);
   server.on("/extract", HTTP_GET, handleExtract);
   server.on("/ping", HTTP_GET, handlePing);
-  
   Serial.println("[SERVER] ✓ Endpoints configured\n");
 }
 
@@ -238,112 +204,63 @@ void setupWebServer() {
 // 📡 API HANDLERS
 // ═════════════════════════════════════════════════════════════════════
 
-// GET /status - Return camera status
 void handleStatus() {
   DynamicJsonDocument doc(256);
   doc["success"] = true;
   doc["status"] = systemStatus;
   doc["ip_address"] = WiFi.localIP().toString();
-  doc["lastImagePath"] = lastImagePath;
-  doc["lastImageSize"] = lastImageSize;
   doc["lastExtractedValue"] = lastExtractedValue;
   
   String response;
   serializeJson(doc, response);
   server.send(200, "application/json", response);
-  
-  Serial.printf("[API] Status request: %s\n", systemStatus.c_str());
 }
 
-// GET /capture - Capture image from camera
 void handleCapture() {
   Serial.println("[CAMERA] Capture request received");
-  systemStatus = "Capturing...";
   
-  // Capture frame
   camera_fb_t* fb = esp_camera_fb_get();
   
   if (!fb) {
     Serial.println("[CAMERA] ✗ Capture failed!");
-    systemStatus = "Capture Failed";
-    
     DynamicJsonDocument doc(128);
     doc["success"] = false;
-    doc["error"] = "Failed to capture frame";
-    
+    doc["error"] = "Failed to capture";
     String response;
     serializeJson(doc, response);
     server.send(500, "application/json", response);
     return;
   }
   
-  Serial.printf("[CAMERA] ✓ Captured! Size: %d bytes\n", fb->len);
+  Serial.printf("[CAMERA] ✓ Captured %d bytes\n", fb->len);
   
-  // Save to SPIFFS
-  File f = SPIFFS.open(lastImagePath, "w");
-  if (f) {
-    f.write(fb->buf, fb->len);
-    f.close();
-    lastImageSize = fb->len;
-    
-    Serial.printf("[SPIFFS] ✓ Image saved: %s (%d bytes)\n", lastImagePath.c_str(), lastImageSize);
-  } else {
-    Serial.println("[SPIFFS] ✗ Failed to save image");
-  }
-  
-  // Also keep in memory for quick access
-  lastImageBuffer = fb->buf;
-  lastImageSize = fb->len;
-  
-  // Return success
   DynamicJsonDocument doc(256);
   doc["success"] = true;
   doc["message"] = "Image captured";
-  doc["filename"] = lastImagePath;
-  doc["size"] = lastImageSize;
+  doc["size"] = fb->len;
   
   String response;
   serializeJson(doc, response);
   server.send(200, "application/json", response);
   
   esp_camera_fb_return(fb);
-  systemStatus = "Ready";
 }
 
-// GET /extract - Extract reading from last captured image
 void handleExtract() {
   Serial.println("[OCR] Extract request received");
-  systemStatus = "Extracting...";
   
-  if (lastImageSize == 0) {
-    Serial.println("[OCR] ✗ No image captured yet!");
-    
-    DynamicJsonDocument doc(128);
-    doc["success"] = false;
-    doc["error"] = "No image available. Call /capture first.";
-    
-    String response;
-    serializeJson(doc, response);
-    server.send(400, "application/json", response);
-    return;
-  }
-  
-  // Capture fresh image
   camera_fb_t* fb = esp_camera_fb_get();
   if (!fb) {
-    Serial.println("[CAMERA] ✗ Failed to get frame for extraction");
-    
+    Serial.println("[OCR] ✗ No frame available");
     DynamicJsonDocument doc(128);
     doc["success"] = false;
-    doc["error"] = "Failed to capture image";
-    
+    doc["error"] = "No frame available";
     String response;
     serializeJson(doc, response);
     server.send(500, "application/json", response);
     return;
   }
   
-  // Send to Render API
   Serial.println("[OCR] Sending image to Render API...");
   
   HTTPClient http;
@@ -356,9 +273,6 @@ void handleExtract() {
   
   if (httpCode == 200) {
     String payload = http.getString();
-    
-    Serial.printf("[HTTP] Response: %s\n", payload.c_str());
-    
     deserializeJson(responseDoc, payload);
     
     if (responseDoc["success"]) {
@@ -375,78 +289,35 @@ void handleExtract() {
       server.send(200, "application/json", response);
       
       Serial.printf("[OCR] ✓ Extracted: %.4f mA\n", lastExtractedValue);
-      systemStatus = "Ready";
     } else {
       DynamicJsonDocument doc(128);
       doc["success"] = false;
-      doc["error"] = "OCR extraction failed";
-      
+      doc["error"] = "OCR failed";
       String response;
       serializeJson(doc, response);
       server.send(500, "application/json", response);
-      
-      Serial.println("[OCR] ✗ Extraction failed");
+      Serial.println("[OCR] ✗ OCR extraction failed");
     }
   } else {
     DynamicJsonDocument doc(256);
     doc["success"] = false;
-    doc["error"] = "Failed to connect to Render API";
+    doc["error"] = "API error";
     doc["http_code"] = httpCode;
-    
     String response;
     serializeJson(doc, response);
     server.send(500, "application/json", response);
-    
-    Serial.printf("[HTTP] Error: %d\n", httpCode);
-    systemStatus = "API Error";
+    Serial.printf("[OCR] ✗ HTTP error %d\n", httpCode);
   }
   
   http.end();
   esp_camera_fb_return(fb);
 }
 
-// GET /ping - Simple ping test
 void handlePing() {
   DynamicJsonDocument doc(128);
   doc["success"] = true;
   doc["message"] = "pong";
-  doc["timestamp"] = millis();
-  
   String response;
   serializeJson(doc, response);
   server.send(200, "application/json", response);
 }
-
-/*
- * ═════════════════════════════════════════════════════════════════════
- * CAMERA PIN CONFIGURATION
- * ═════════════════════════════════════════════════════════════════════
- * 
- * These pins are FIXED for ESP32-CAM module.
- * Do NOT change them!
- * 
- * Camera Data Pins:
- * GPIO 35 (Y9)  - Data pin D0
- * GPIO 34 (Y8)  - Data pin D1
- * GPIO 39 (Y7)  - Data pin D2
- * GPIO 36 (Y6)  - Data pin D3
- * GPIO 21 (Y5)  - Data pin D4
- * GPIO 19 (Y4)  - Data pin D5
- * GPIO 18 (Y3)  - Data pin D6
- * GPIO 5  (Y2)  - Data pin D7
- * 
- * Camera Control Pins:
- * GPIO 22 (PCLK)   - Pixel Clock
- * GPIO 23 (HREF)   - Horizontal Reference
- * GPIO 25 (VSYNC)  - Vertical Sync
- * GPIO 0  (XCLK)   - Master Clock
- * 
- * Camera I2C:
- * GPIO 26 (SIOD)   - I2C SDA
- * GPIO 27 (SIOC)   - I2C SCL
- * 
- * GPIO 32 (PWDN)   - Power Down
- * GPIO -1 (RESET)  - Reset (unused)
- * 
- * ═════════════════════════════════════════════════════════════════════
- */
