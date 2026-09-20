@@ -41,10 +41,15 @@ const AntennaControl = () => {
     try {
       setStatus('Connecting to 10.135.98.50...');
       
-      // Test connection to Main ESP32
-      const response = await fetch(`http://${MAIN_ESP32_IP}/status`, { 
-        timeout: 5000 
+      // Create an abort controller for timeout
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000);
+      
+      const response = await fetch(`http://${MAIN_ESP32_IP}/status`, {
+        signal: controller.signal
       });
+      
+      clearTimeout(timeoutId);
       
       if (response.ok) {
         setIsConnected(true);

@@ -1,4 +1,4 @@
-/*
+/* 
  * ═════════════════════════════════════════════════════════════════════
  * RF ANTENNA AUTOMATION SYSTEM - ESP32 MOTOR CONTROLLER
  * ═════════════════════════════════════════════════════════════════════
@@ -190,10 +190,28 @@ void connectToWiFi() {
 // ═════════════════════════════════════════════════════════════════════
 
 void setupWebServer() {
+
+  server.enableCORS();  // Enable CORS globally
+  
+  // Handle CORS preflight requests
+  server.on("/status", HTTP_OPTIONS, []() {
+    server.sendHeader("Access-Control-Allow-Origin", "*");
+    server.sendHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+    server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
+    server.send(200);
+  });
   Serial.println("[SERVER] Setting up API endpoints...");
   
   // API Endpoints (returns JSON only)
-  server.on("/status", HTTP_GET, handleStatus);           // Get current status
+  server.on("/status", HTTP_GET, []() {                   // Get current status
+    server.sendHeader("Access-Control-Allow-Origin", "*");
+    DynamicJsonDocument doc(256);
+    doc["status"] = "ok";
+    doc["ip"] = WiFi.localIP().toString();
+    String response;
+    serializeJson(doc, response);
+    server.send(200, "application/json", response);
+  });          
   server.on("/rotate", HTTP_GET, handleRotate);           // Rotate to angle
   server.on("/capture", HTTP_GET, handleCapture);         // Tell camera to capture
   server.on("/extract", HTTP_GET, handleExtract);         // Extract from camera image
