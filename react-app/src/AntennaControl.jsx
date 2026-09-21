@@ -1,11 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { db } from './firebase-config';
-import { ref, onValue, set } from 'firebase/database';
+import { ref, onValue, set, remove } from 'firebase/database';
 import './AntennaControl.css';
 
 const AntennaControl = () => {
   // ═══════════════════════════════════════════════════════════════════
-  // STATIC IP ADDRESSES (Always the same - no need to check Serial!)
+  // STATIC IP ADDRESSES
   // ═══════════════════════════════════════════════════════════════════
   const MAIN_ESP32_IP = '10.135.98.50';        // Main ESP32 (Motor)
   const ESP32_CAM_IP = '10.135.98.51';         // ESP32-CAM (Camera)
@@ -19,7 +19,8 @@ const AntennaControl = () => {
   const [measurements, setMeasurements] = useState([]);
   const [status, setStatus] = useState('Ready to connect');
   const [progress, setProgress] = useState(0);
-
+  const [currentMeasurementIndex, setCurrentMeasurementIndex] = useState(0);
+  const isRunningRef = React.useRef(false);
   // Firebase: Listen to measurements
   useEffect(() => {
     const measurementsRef = ref(db, 'measurements');
@@ -36,12 +37,61 @@ const AntennaControl = () => {
     return () => unsubscribe();
   }, []);
 
-  // Connect to ESP32 (uses static IP)
+  // ═══════════════════════════════════════════════════════════════════
+  // NON-BLOCKING WAIT WITH COUNTDOWN
+  // ═══════════════════════════════════════════════════════════════════
+  const waitWithProgress = (seconds, angle) => {
+    return new Promise((resolve) => {
+      let remaining = seconds;
+      const interval = setInterval(() => {
+        remaining--;
+        setStatus(`⏳ Waiting ${remaining}s at ${angle}° for field stabilization...`);
+        if (remaining <= 0) {
+          clearInterval(interval);
+          resolve();
+        }
+      }, 1000);
+    });
+  };
+
+  // ═══════════════════════════════════════════════════════════════════
+  // VALIDATE DEVICE CONNECTION
+  // ═══════════════════════════════════════════════════════════════════
+  const validateMotor = async () => {
+    try {
+      const res = await fetch(`http://${MAIN_ESP32_IP}/ping`, { 
+        signal: AbortSignal.timeout(5000) 
+      });
+      console.log('[VALIDATE] Motor ping:', res.ok);
+      return res.ok;
+    } catch (error) { 
+      console.error('[VALIDATE] Motor failed:', error.message);
+      return false; 
+    }
+  };
+
+  const validateCamera = async () => {
+    try {
+      console.log('[VALIDATE] Camera - waiting up to 10 seconds...');
+      const res = await fetch(`http://${ESP32_CAM_IP}/ping`, { 
+        signal: AbortSignal.timeout(10000)  // ✅ INCREASED FROM 5000
+      });
+      console.log('[VALIDATE] Camera ping:', res.ok);
+      return res.ok;
+    } catch (error) { 
+      console.error('[VALIDATE] Camera failed:', error.message);
+      return false; 
+    }
+  };
+
+  // ═══════════════════════════════════════════════════════════════════
+  // 📡 CONNECTION
+  // ═══════════════════════════════════════════════════════════════════
+
   const handleConnect = async () => {
     try {
       setStatus('Connecting to 10.135.98.50...');
       
-      // Create an abort controller for timeout
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 5000);
       
@@ -63,108 +113,114 @@ const AntennaControl = () => {
     }
   };
 
-  // Send command to Main ESP32
+  // ═══════════════════════════════════════════════════════════════════
+  // SEND COMMANDS TO MOTOR ESP32
+  // ═══════════════════════════════════════════════════════════════════
+
   const sendCommand = async (command, angle = null) => {
     if (!isConnected) {
-      alert('Not connected to ESP32. Click "Connect" button first.');
-      return;
+      console.error('[ERROR] Not connected to ESP32');
+      setStatus('❌ Not connected. Click Connect first.');
+      return false;
     }
 
     try {
-      const url = angle !== null 
-        ? `http://${MAIN_ESP32_IP}/rotate?angle=${angle}`
-        : `http://${MAIN_ESP32_IP}/control?cmd=${command}`;
+      let url;
+      const timeout = 15000;
+      
+      if (angle !== null) {
+        url = `http://${MAIN_ESP32_IP}/rotate?angle=${angle}`;
+      } else if (command === 'reset') {
+        url = `http://${MAIN_ESP32_IP}/rotate?angle=0`;
+      } else if (command === 'enable') {
+        url = `http://${MAIN_ESP32_IP}/enable-motor`;
+      } else if (command === 'disable') {
+        url = `http://${MAIN_ESP32_IP}/disable-motor`;
+      } else {
+        throw new Error(`Unknown command: ${command}`);
+      }
 
-      const response = await fetch(url);
-      if (!response.ok) throw new Error('Command failed');
+      console.log(`[MOTOR] Sending: ${url}`);
+      
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeout);
+      
+      const response = await fetch(url, { signal: controller.signal });
+      clearTimeout(timeoutId);
+      
+      if (!response.ok) {
+        console.error(`[ERROR] Motor command failed: HTTP ${response.status}`);
+        throw new Error(`HTTP ${response.status}`);
+      }
+      
+      const data = await response.json();
+      console.log('[OK] Command response:', data);
       return true;
+      
     } catch (error) {
-      alert(`Error sending command: ${error.message}`);
+      console.error(`[ERROR] sendCommand failed:`, error.message);
+      setStatus(`❌ Motor Error: ${error.message}`);
       return false;
     }
   };
 
-  // Start measurement cycle
-  const handleStart = async () => {
-    if (!isConnected) {
-      alert('Not connected to ESP32');
-      return;
-    }
+  // ═══════════════════════════════════════════════════════════════════
+  // CAPTURE AND EXTRACT FROM CAMERA
+  // ═══════════════════════════════════════════════════════════════════
 
-    setIsRunning(true);
-    setStatus('Starting measurement cycle...');
-    
-    try {
-      await runMeasurementCycle();
-    } catch (error) {
-      setStatus(`Error: ${error.message}`);
-      alert(error.message);
-    } finally {
-      setIsRunning(false);
-    }
-  };
-
-  // Run full measurement cycle
-  const runMeasurementCycle = async () => {
-    for (let i = 0; i < repeatCount; i++) {
-      if (!isRunning) {
-        setStatus('Paused');
-        break;
-      }
-
-      const angle = (i * degreesPerMove) % 360;
-      setCurrentAngle(angle);
-      setStatus(`📍 Measuring at ${angle}°...`);
-      setProgress(Math.round((i / repeatCount) * 100));
-
-      // Step 1: Move to angle
-      const moved = await sendCommand('rotate', angle);
-      if (!moved) throw new Error(`Failed to move to ${angle}°`);
-
-      // Step 2: Wait for field stabilization
-      setStatus(`⏳ Waiting 30s at ${angle}° for field stabilization...`);
-      await new Promise((resolve) => setTimeout(resolve, 30000));
-
-      // Step 3: Capture and extract
-      setStatus(`📷 Capturing image at ${angle}°...`);
-      const value = await captureAndExtract();
-
-      if (value === null) {
-        throw new Error(`Failed to extract data at ${angle}°`);
-      }
-
-      // Step 4: Save to Firebase
-      await saveMeasurement(angle, value);
-      setStatus(`✅ Saved: ${angle}° = ${value.toFixed(4)} mA`);
-    }
-
-    setStatus('✨ Measurement cycle complete!');
-    setProgress(100);
-    setIsRunning(false);
-  };
-
-  // Capture image and extract via API
   const captureAndExtract = async () => {
     try {
-      // Step 1: Tell ESP32-CAM to capture image
-      const captureResponse = await fetch(`http://${ESP32_CAM_IP}/capture`);
-      if (!captureResponse.ok) throw new Error('Failed to capture image');
+      // Step 1: Capture image
+      console.log('[CAMERA] Starting capture...');
+      setStatus(`📷 Capturing image...`);
+      
+      const captureResponse = await fetch(`http://${ESP32_CAM_IP}/capture`, {
+        method: 'GET',
+        signal: AbortSignal.timeout(15000)  // ✅ INCREASED FROM 10000
+      });
+      
+      if (!captureResponse.ok) {
+        console.error(`[ERROR] Capture failed: HTTP ${captureResponse.status}`);
+        throw new Error(`Capture HTTP ${captureResponse.status}`);
+      }
+      console.log('[OK] Image captured');
 
-      // Step 2: Tell ESP32-CAM to extract (sends to Render API)
-      const extractResponse = await fetch(`http://${ESP32_CAM_IP}/extract`);
-      if (!extractResponse.ok) throw new Error('OCR extraction failed');
+      // Step 2: Extract with OCR
+      console.log('[OCR] Starting extraction...');
+      setStatus(`📤 Sending to OCR API...`);
+      
+      const extractResponse = await fetch(`http://${ESP32_CAM_IP}/extract`, {
+        method: 'GET',
+        signal: AbortSignal.timeout(40000)  // ✅ INCREASED FROM 20000
+      });
+      
+      if (!extractResponse.ok) {
+        console.error(`[ERROR] OCR request failed: HTTP ${extractResponse.status}`);
+        throw new Error(`OCR HTTP ${extractResponse.status}`);
+      }
       
       const data = await extractResponse.json();
-      if (!data.success) throw new Error('Extraction returned error');
       
-      return parseFloat(data.extractedValue);
+      if (!data.success) {
+        console.error('[ERROR] OCR returned error:', data.error);
+        throw new Error(`OCR Error: ${data.error}`);
+      }
+      
+      const value = parseFloat(data.extractedValue);
+      console.log('[OK] OCR extracted:', value, 'mA');
+      return value;
+      
     } catch (error) {
-      console.error('Capture/Extract error:', error);
+      console.error('[FATAL] Capture/Extract failed:', error.message);
+      setStatus(`❌ OCR ERROR: ${error.message}`);
       return null;
     }
   };
 
-  // Save measurement to Firebase
+  // ═══════════════════════════════════════════════════════════════════
+  // SAVE MEASUREMENT TO FIREBASE
+  // ═══════════════════════════════════════════════════════════════════
+
   const saveMeasurement = async (angle, value) => {
     try {
       const measurementRef = ref(db, `measurements/${Date.now()}`);
@@ -173,26 +229,154 @@ const AntennaControl = () => {
         current_reading: value,
         timestamp: new Date().toISOString(),
       });
+      console.log('[FIREBASE] Saved:', angle, value);
     } catch (error) {
-      console.error('Firebase save error:', error);
+      console.error('[FIREBASE] Save error:', error);
     }
   };
 
-  // Pause measurement
+  // ═══════════════════════════════════════════════════════════════════
+  // FULL MEASUREMENT CYCLE
+  // ═══════════════════════════════════════════════════════════════════
+
+  const runMeasurementCycle = async (startIndex = 0) => {
+    console.log(`[CYCLE] STARTING - startIndex: ${startIndex}, repeatCount: ${repeatCount}`);
+    
+    for (let i = startIndex; i < repeatCount; i++) {
+      // ✅ CHECK REF INSTEAD OF STATE
+      if (!isRunningRef.current) {
+        console.log('[CYCLE] Paused by user');
+        setCurrentMeasurementIndex(i);
+        setStatus('⏸ Paused');
+        return;
+      }
+
+      const angle = (i * degreesPerMove) % 360;
+      setCurrentAngle(angle);
+      
+      const currentProgress = Math.round((measurements.length / repeatCount) * 100);
+      setProgress(Math.min(currentProgress, 99));
+      
+      console.log(`[CYCLE] Step ${i + 1}/${repeatCount} at ${angle}°`);
+
+      // Step 1: Move to angle
+      setStatus(`🔄 Rotating to ${angle}°...`);
+      const moved = await sendCommand('rotate', angle);
+      if (!moved) {
+        throw new Error(`Failed to move to ${angle}°`);
+      }
+
+      // Step 2: Wait for field stabilization
+      await waitWithProgress(30, angle);
+
+      // Step 3: Capture and extract
+      setStatus(`📷 Capturing at ${angle}°...`);
+      const value = await captureAndExtract();
+      if (value === null) {
+        throw new Error(`Failed to extract data at ${angle}°`);
+      }
+
+      // Step 4: Save to Firebase
+      await saveMeasurement(angle, value);
+      setStatus(`✅ Angle ${angle}°: ${value.toFixed(4)} mA`);
+    }
+
+    console.log(`[CYCLE] ALL COMPLETE`);
+    setStatus('✨ Measurement cycle complete!');
+    setProgress(100);
+    isRunningRef.current = false;  // ✅ STOP REF
+    setIsRunning(false);
+    setCurrentMeasurementIndex(0);
+  };
+
+  // ═══════════════════════════════════════════════════════════════════
+  // START MEASUREMENT CYCLE (WITH VALIDATION)
+  // ═══════════════════════════════════════════════════════════════════
+
+  const handleStart = async () => {
+    if (!isConnected) {
+      alert('Not connected to ESP32');
+      return;
+    }
+
+    setStatus('🔍 Validating devices...');
+    console.log('[START] Validating motor...');
+    const motorOk = await validateMotor();
+    
+    console.log('[START] Validating camera...');
+    const cameraOk = await validateCamera();
+    
+    if (!motorOk) {
+      setStatus('❌ Motor ESP32 not responding');
+      alert('Motor ESP32 not responding. Check power and connection.');
+      return;
+    }
+    if (!cameraOk) {
+      setStatus('❌ Camera ESP32 not responding');
+      alert('Camera ESP32 not responding. Check power and connection.');
+      return;
+    }
+
+    // ✅ SET REF FIRST
+    isRunningRef.current = true;
+    setIsRunning(true);
+    setCurrentMeasurementIndex(0);
+    setProgress(0);
+    setStatus('Starting measurement cycle...');
+    
+    try {
+      await runMeasurementCycle(0);
+    } catch (error) {
+      console.error('[FATAL] Cycle error:', error.message);
+      setStatus(`❌ ERROR: ${error.message}`);
+      alert(`Measurement failed: ${error.message}`);
+    } finally {
+      isRunningRef.current = false;  // ✅ STOP REF
+      setIsRunning(false);
+    }
+  };
+
+  // ═══════════════════════════════════════════════════════════════════
+  // PAUSE MEASUREMENT
+  // ═══════════════════════════════════════════════════════════════════
+
   const handlePause = () => {
+    console.log('[PAUSE] User paused');
+    isRunningRef.current = false;  // ✅ USE REF
     setIsRunning(false);
     setStatus('⏸ Paused');
   };
 
-  // Resume measurement
-  const handleResume = async () => {
-    setIsRunning(true);
-    setStatus('▶ Resuming...');
-    await runMeasurementCycle();
-  };
+  // ═══════════════════════════════════════════════════════════════════
+  // RESUME MEASUREMENT
+  // ═══════════════════════════════════════════════════════════════════
 
-  // Reset to 0
+const handleResume = async () => {
+  if (isRunningRef.current) return;  // ✅ USE REF
+  
+  console.log('[RESUME] Resuming from index:', currentMeasurementIndex);
+  isRunningRef.current = true;  // ✅ USE REF
+  setIsRunning(true);
+  setStatus('▶ Resuming...');
+  
+  try {
+    await runMeasurementCycle(currentMeasurementIndex);
+  } catch (error) {
+    console.error('[FATAL] Resume error:', error.message);
+    setStatus(`❌ ERROR: ${error.message}`);
+    alert(`Resume failed: ${error.message}`);
+  } finally {
+    isRunningRef.current = false;  // ✅ STOP REF
+    setIsRunning(false);
+  }
+};
+
+  // ═══════════════════════════════════════════════════════════════════
+  // RESET TO 0°
+  // ═══════════════════════════════════════════════════════════════════
+
   const handleReset = async () => {
+    console.log('[RESET] Resetting to 0°');
     const success = await sendCommand('reset');
     if (success) {
       setCurrentAngle(0);
@@ -200,15 +384,32 @@ const AntennaControl = () => {
     }
   };
 
-  // Clear all data
-  const handleClearData = async () => {
-    if (window.confirm('Clear all measurements?')) {
-      setMeasurements([]);
-      setStatus('Data cleared');
-    }
-  };
+  // ═══════════════════════════════════════════════════════════════════
+  // CLEAR ALL DATA
+  // ═══════════════════════════════════════════════════════════════════
 
-  // Export data as CSV
+  const handleClearData = async () => {
+  if (window.confirm('Clear all measurements from the database?')) {
+    try {
+      setStatus('Clearing data from database...');
+      const measurementsRef = ref(db, 'measurements');
+      await remove(measurementsRef);
+      
+      setMeasurements([]);
+      setStatus('✓ Data cleared from database');
+      console.log('[CLEAR] Measurements deleted from Firebase');
+    } catch (error) {
+      console.error('[CLEAR] Failed to delete from Firebase:', error);
+      setStatus(`❌ Delete error: ${error.message}`);
+      alert(`Failed to delete: ${error.message}`);
+    }
+  }
+};
+
+  // ═══════════════════════════════════════════════════════════════════
+  // EXPORT DATA AS CSV
+  // ═══════════════════════════════════════════════════════════════════
+
   const handleExportCSV = () => {
     if (measurements.length === 0) {
       alert('No data to export');
@@ -228,7 +429,12 @@ const AntennaControl = () => {
     a.href = url;
     a.download = `antenna_measurements_${Date.now()}.csv`;
     a.click();
+    console.log('[EXPORT] CSV exported');
   };
+
+  // ═══════════════════════════════════════════════════════════════════
+  // RENDER UI
+  // ═══════════════════════════════════════════════════════════════════
 
   return (
     <div className="antenna-container">
@@ -318,7 +524,7 @@ const AntennaControl = () => {
               </button>
               <button
                 onClick={handleResume}
-                disabled={!isRunning || isRunning}
+                disabled={isRunning || currentMeasurementIndex === 0}
                 className="btn btn-info"
               >
                 ▶ Resume
@@ -393,6 +599,10 @@ const AntennaControl = () => {
               ✨ <strong>All IPs are STATIC!</strong><br/>
               Each time you power on, the ESP32s will have the same IPs.<br/>
               No need to check Serial Monitor.
+              <br/>
+              <br/>
+              💡 <strong>Debug tip:</strong> Open browser DevTools (F12) → Console tab<br/>
+              You'll see detailed logs of every operation!
             </p>
           </section>
         </div>

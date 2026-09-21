@@ -1,10 +1,12 @@
 /*
  * ═════════════════════════════════════════════════════════════════════
- * RF ANTENNA AUTOMATION SYSTEM - ESP32-CAM MODULE
+ * RF ANTENNA AUTOMATION SYSTEM - ESP32-CAM MODULE [FIXED VERSION]
  * ═════════════════════════════════════════════════════════════════════
  * 
- * Based on WORKING camera code + API endpoints for automation system
- * Uses proven camera initialization that works!
+ * ✅ FIXES APPLIED:
+ * - CORS headers added to ALL endpoints (FIX #1)
+ * - Improved error handling and logging
+ * - Connection timeout handling
  * 
  * ═════════════════════════════════════════════════════════════════════
  */
@@ -73,11 +75,11 @@ void setup() {
   delay(2000);
   
   Serial.println("\n\n╔════════════════════════════════════════════════════╗");
-  Serial.println("║  📷 ESP32-CAM MODULE - PRODUCTION VERSION         ║");
-  Serial.println("║  (Based on proven working code)                   ║");
+  Serial.println("║  📷 ESP32-CAM MODULE - FIXED VERSION              ║");
+  Serial.println("║  (CORS enabled - All endpoints accessible)       ║");
   Serial.println("╚════════════════════════════════════════════════════╝\n");
   
-  // Initialize Camera (PROVEN WORKING CONFIG)
+  // Initialize Camera
   initializeCamera();
   
   // Connect WiFi with Static IP
@@ -101,7 +103,7 @@ void loop() {
 }
 
 // ═════════════════════════════════════════════════════════════════════
-// 📷 CAMERA INITIALIZATION (PROVEN WORKING)
+// 📷 CAMERA INITIALIZATION
 // ═════════════════════════════════════════════════════════════════════
 
 void initializeCamera() {
@@ -109,7 +111,7 @@ void initializeCamera() {
   
   camera_config_t config;
   config.ledc_channel = LEDC_CHANNEL_0;
-  config.ledc_timer = LEDC_TIMER_0;       // ← IMPORTANT: This was missing!
+  config.ledc_timer = LEDC_TIMER_0;
   config.pin_d0 = Y2_GPIO_NUM;
   config.pin_d1 = Y3_GPIO_NUM;
   config.pin_d2 = Y4_GPIO_NUM;
@@ -126,9 +128,9 @@ void initializeCamera() {
   config.pin_sscb_scl = SIOC_GPIO_NUM;
   config.pin_pwdn = PWDN_GPIO_NUM;
   config.pin_reset = RESET_GPIO_NUM;
-  config.xclk_freq_hz = 20000000;         // 20 MHz - works well
+  config.xclk_freq_hz = 20000000;         // 20 MHz
   config.pixel_format = PIXFORMAT_JPEG;
-  config.frame_size = FRAMESIZE_VGA;      // 640x480 - good balance
+  config.frame_size = FRAMESIZE_VGA;      // 640x480
   config.jpeg_quality = 12;               // Good quality
   config.fb_count = 1;
   
@@ -152,7 +154,7 @@ void initializeCamera() {
 
 void connectToWiFi() {
   Serial.println("[WIFI] Configuring static IP...");
-  Serial.println("[WIFI] Static IP: 192.168.1.51 (ALWAYS the same!)");
+  Serial.println("[WIFI] Static IP: 10.135.98.51 (ALWAYS the same!)");
   
   if (!WiFi.config(staticIP, gateway, subnet, primaryDNS, secondaryDNS)) {
     Serial.println("[WIFI] ✗ Failed to configure static IP");
@@ -177,7 +179,7 @@ void connectToWiFi() {
     Serial.println("[WIFI] ✓ Connected!");
     Serial.print("[WIFI] IP Address: ");
     Serial.println(WiFi.localIP());
-    Serial.println("[WIFI] ⭐ IP is ALWAYS 192.168.1.51");
+    Serial.println("[WIFI] ⭐ IP is ALWAYS 10.135.98.51");
     Serial.println("[WIFI] ⭐ No need to check Serial Monitor!");
     systemStatus = "Connected";
   } else {
@@ -188,23 +190,56 @@ void connectToWiFi() {
 }
 
 // ═════════════════════════════════════════════════════════════════════
+// ✅ FIX #1: HELPER FUNCTION TO ADD CORS HEADERS
+// ═════════════════════════════════════════════════════════════════════
+
+void addCORSHeaders() {
+  server.sendHeader("Access-Control-Allow-Origin", "*");
+  server.sendHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+  server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
+}
+
+// ═════════════════════════════════════════════════════════════════════
 // 🌐 WEB SERVER SETUP
 // ═════════════════════════════════════════════════════════════════════
 
 void setupWebServer() {
-  Serial.println("[SERVER] Setting up endpoints...");
+  Serial.println("[SERVER] Setting up endpoints with CORS...");
+  
   server.on("/status", HTTP_GET, handleStatus);
   server.on("/capture", HTTP_GET, handleCapture);
   server.on("/extract", HTTP_GET, handleExtract);
   server.on("/ping", HTTP_GET, handlePing);
-  Serial.println("[SERVER] ✓ Endpoints configured\n");
+  
+  // Handle CORS preflight requests
+  server.on("/status", HTTP_OPTIONS, []() { 
+    addCORSHeaders();
+    server.send(200);
+  });
+  server.on("/capture", HTTP_OPTIONS, []() { 
+    addCORSHeaders();
+    server.send(200);
+  });
+  server.on("/extract", HTTP_OPTIONS, []() { 
+    addCORSHeaders();
+    server.send(200);
+  });
+  server.on("/ping", HTTP_OPTIONS, []() { 
+    addCORSHeaders();
+    server.send(200);
+  });
+  
+  Serial.println("[SERVER] ✓ Endpoints configured with CORS\n");
 }
 
 // ═════════════════════════════════════════════════════════════════════
-// 📡 API HANDLERS
+// 📡 API HANDLERS (WITH CORS)
 // ═════════════════════════════════════════════════════════════════════
 
+// ✅ FIX #1: CORS headers added
 void handleStatus() {
+  addCORSHeaders();  // ← FIX: Add CORS
+  
   DynamicJsonDocument doc(256);
   doc["success"] = true;
   doc["status"] = systemStatus;
@@ -214,9 +249,14 @@ void handleStatus() {
   String response;
   serializeJson(doc, response);
   server.send(200, "application/json", response);
+  
+  Serial.println("[STATUS] Health check OK");
 }
 
+// ✅ FIX #1: CORS headers added
 void handleCapture() {
+  addCORSHeaders();  // ← FIX: Add CORS
+  
   Serial.println("[CAMERA] Capture request received");
   
   camera_fb_t* fb = esp_camera_fb_get();
@@ -246,7 +286,10 @@ void handleCapture() {
   esp_camera_fb_return(fb);
 }
 
+// ✅ FIX #1: CORS headers added
 void handleExtract() {
+  addCORSHeaders();  // ← FIX: Add CORS
+  
   Serial.println("[OCR] Extract request received");
   
   camera_fb_t* fb = esp_camera_fb_get();
@@ -266,6 +309,7 @@ void handleExtract() {
   HTTPClient http;
   http.begin(OCR_API_URL);
   http.addHeader("Content-Type", "image/jpeg");
+  http.setTimeout(15000);  // 15 second timeout
   
   int httpCode = http.POST(fb->buf, fb->len);
   
@@ -313,11 +357,20 @@ void handleExtract() {
   esp_camera_fb_return(fb);
 }
 
+// ✅ FIX #1: CORS headers added
 void handlePing() {
+  addCORSHeaders();  // ← FIX: Add CORS
+  
   DynamicJsonDocument doc(128);
   doc["success"] = true;
   doc["message"] = "pong";
   String response;
   serializeJson(doc, response);
   server.send(200, "application/json", response);
+  
+  Serial.println("[PING] Ping OK");
 }
+
+// ═════════════════════════════════════════════════════════════════════
+// END OF FIXED CODE
+// ═════════════════════════════════════════════════════════════════════

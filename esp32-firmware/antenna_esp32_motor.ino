@@ -4,8 +4,10 @@
  * ═════════════════════════════════════════════════════════════════════
  * 
  * This is the MAIN ESP32 that ONLY controls the motor.
- * It receives commands from your React website (Vercel).
+ * It receives commands from your React website.
  * It communicates with ESP32-CAM module for image capture.
+ * 
+ * ⭐ UPDATED: CORS headers added to ALL endpoints
  * 
  * NO HTML INTERFACE - Use the React website instead!
  * 
@@ -38,7 +40,7 @@ const char* WIFI_PASSWORD = "12233344445";      // ← UPDATE THIS
 IPAddress staticIP(10, 135, 98, 50);       // Fixed IP
 IPAddress gateway(10, 135, 98, 1);         // Your router IP
 IPAddress subnet(255, 255, 255, 0);        // Subnet mask
-IPAddress primaryDNS(10, 135, 98, 5);      // Google DNS
+IPAddress primaryDNS(10, 135, 98, 5);      // Your hotspot DNS
 IPAddress secondaryDNS(8, 8, 8, 8);        // Google DNS
 
 // ESP32-CAM Module (separate device on same network)
@@ -57,7 +59,7 @@ const char* FIREBASE_AUTH = "your-firebase-token";
 
 #define STEP_PIN 19        // GPIO 19 - Stepper STEP pulse
 #define DIR_PIN 18         // GPIO 18 - Direction control
-#define ENABLE_PIN 21      // GPIO 21 - Motor enable (active LOW) - CHANGED FROM GPIO 21
+#define ENABLE_PIN 21      // GPIO 21 - Motor enable (active LOW)
 
 // ═════════════════════════════════════════════════════════════════════
 // ⚙️ MOTOR PARAMETERS
@@ -96,6 +98,7 @@ void setup() {
   Serial.println("\n\n╔════════════════════════════════════════════════════╗");
   Serial.println("║  🛰️  ESP32 MOTOR CONTROLLER - STARTUP             ║");
   Serial.println("║  (React website controls this device)             ║");
+  Serial.println("║  ⭐ CORS ENABLED - All endpoints accessible       ║");
   Serial.println("╚════════════════════════════════════════════════════╝\n");
   
   // Initialize Motor
@@ -149,7 +152,7 @@ void initializeMotor() {
 
 void connectToWiFi() {
   Serial.println("[WIFI] Configuring static IP...");
-  Serial.println("[WIFI] Static IP: 192.168.1.50 (ALWAYS the same!)");
+  Serial.println("[WIFI] Static IP: 10.135.98.50 (ALWAYS the same!)");
   
   // Configure static IP BEFORE connecting
   if (!WiFi.config(staticIP, gateway, subnet, primaryDNS, secondaryDNS)) {
@@ -175,7 +178,7 @@ void connectToWiFi() {
     Serial.println("[WIFI] ✓ Connected!");
     Serial.print("[WIFI] IP Address: ");
     Serial.println(WiFi.localIP());
-    Serial.println("[WIFI] ⭐ IP is ALWAYS 192.168.1.50");
+    Serial.println("[WIFI] ⭐ IP is ALWAYS 10.135.98.50");
     Serial.println("[WIFI] ⭐ No need to check Serial Monitor!");
     systemStatus = "Connected";
   } else {
@@ -190,61 +193,101 @@ void connectToWiFi() {
 // ═════════════════════════════════════════════════════════════════════
 
 void setupWebServer() {
-
-  server.enableCORS();  // Enable CORS globally
   
-  // Handle CORS preflight requests
-  server.on("/status", HTTP_OPTIONS, []() {
+  Serial.println("[SERVER] Setting up API endpoints with CORS...");
+  
+  // API Endpoints (returns JSON only)
+  // ✅ /status endpoint with CORS
+  server.on("/status", HTTP_GET, []() {
+    server.sendHeader("Access-Control-Allow-Origin", "*");
+    server.sendHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+    server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
+    
+    DynamicJsonDocument doc(256);
+    doc["status"] = "ok";
+    doc["ip"] = WiFi.localIP().toString();
+    doc["angle"] = currentAngle;
+    doc["motor_enabled"] = motorEnabled;
+    String response;
+    serializeJson(doc, response);
+    server.send(200, "application/json", response);
+  });
+  
+  // ✅ /rotate endpoint with CORS
+  server.on("/rotate", HTTP_GET, handleRotate);
+  
+  // ✅ /capture endpoint with CORS
+  server.on("/capture", HTTP_GET, handleCapture);
+  
+  // ✅ /extract endpoint with CORS
+  server.on("/extract", HTTP_GET, handleExtract);
+  
+  // ✅ /enable-motor endpoint with CORS
+  server.on("/enable-motor", HTTP_GET, handleEnableMotor);
+  
+  // ✅ /disable-motor endpoint with CORS
+  server.on("/disable-motor", HTTP_GET, handleDisableMotor);
+  
+  // ✅ /ping endpoint with CORS
+  server.on("/ping", HTTP_GET, handlePing);
+  
+  // ✅ Handle OPTIONS requests for preflight (CORS)
+  server.on("/rotate", HTTP_OPTIONS, []() {
     server.sendHeader("Access-Control-Allow-Origin", "*");
     server.sendHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
     server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
     server.send(200);
   });
-  Serial.println("[SERVER] Setting up API endpoints...");
   
-  // API Endpoints (returns JSON only)
-  server.on("/status", HTTP_GET, []() {                   // Get current status
+  server.on("/capture", HTTP_OPTIONS, []() {
     server.sendHeader("Access-Control-Allow-Origin", "*");
-    DynamicJsonDocument doc(256);
-    doc["status"] = "ok";
-    doc["ip"] = WiFi.localIP().toString();
-    String response;
-    serializeJson(doc, response);
-    server.send(200, "application/json", response);
-  });          
-  server.on("/rotate", HTTP_GET, handleRotate);           // Rotate to angle
-  server.on("/capture", HTTP_GET, handleCapture);         // Tell camera to capture
-  server.on("/extract", HTTP_GET, handleExtract);         // Extract from camera image
-  server.on("/enable-motor", HTTP_GET, handleEnableMotor);
-  server.on("/disable-motor", HTTP_GET, handleDisableMotor);
-  server.on("/ping", HTTP_GET, handlePing);               // Ping test
+    server.sendHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+    server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
+    server.send(200);
+  });
   
-  Serial.println("[SERVER] ✓ Endpoints configured\n");
+  server.on("/extract", HTTP_OPTIONS, []() {
+    server.sendHeader("Access-Control-Allow-Origin", "*");
+    server.sendHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+    server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
+    server.send(200);
+  });
+  
+  server.on("/enable-motor", HTTP_OPTIONS, []() {
+    server.sendHeader("Access-Control-Allow-Origin", "*");
+    server.sendHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+    server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
+    server.send(200);
+  });
+  
+  server.on("/disable-motor", HTTP_OPTIONS, []() {
+    server.sendHeader("Access-Control-Allow-Origin", "*");
+    server.sendHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+    server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
+    server.send(200);
+  });
+  
+  server.on("/ping", HTTP_OPTIONS, []() {
+    server.sendHeader("Access-Control-Allow-Origin", "*");
+    server.sendHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+    server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
+    server.send(200);
+  });
+  
+  Serial.println("[SERVER] ✓ Endpoints configured with CORS\n");
 }
 
 // ═════════════════════════════════════════════════════════════════════
-// 📡 API HANDLERS
+// 📡 API HANDLERS (WITH CORS HEADERS)
 // ═════════════════════════════════════════════════════════════════════
-
-// GET /status - Return current motor status
-void handleStatus() {
-  DynamicJsonDocument doc(256);
-  doc["success"] = true;
-  doc["angle"] = currentAngle;
-  doc["status"] = systemStatus;
-  doc["motor_enabled"] = motorEnabled;
-  doc["ip_address"] = WiFi.localIP().toString();
-  doc["running"] = isRunning;
-  
-  String response;
-  serializeJson(doc, response);
-  server.send(200, "application/json", response);
-  
-  Serial.printf("[API] Status request: angle=%d°, status=%s\n", currentAngle, systemStatus.c_str());
-}
 
 // GET /rotate?angle=90 - Rotate motor to specific angle
 void handleRotate() {
+  // ✅ ADD CORS HEADER HERE
+  server.sendHeader("Access-Control-Allow-Origin", "*");
+  server.sendHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+  server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
+  
   if (!server.hasArg("angle")) {
     DynamicJsonDocument doc(128);
     doc["success"] = false;
@@ -276,10 +319,15 @@ void handleRotate() {
 
 // GET /capture - Tell ESP32-CAM to capture image
 void handleCapture() {
+  // ✅ ADD CORS HEADER HERE
+  server.sendHeader("Access-Control-Allow-Origin", "*");
+  server.sendHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+  server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
+  
   Serial.println("[CAMERA] Capture request received");
   
   // Send command to ESP32-CAM
-  const char* camURL = "http://10.135.98.51/capture";  // ← Use actual camera IP
+  const char* camURL = "http://10.135.98.51/capture";  // ← Correct camera IP
   
   HTTPClient http;
   http.begin(camURL);
@@ -312,6 +360,11 @@ void handleCapture() {
 
 // GET /extract - Extract reading from camera image
 void handleExtract() {
+  // ✅ ADD CORS HEADER HERE
+  server.sendHeader("Access-Control-Allow-Origin", "*");
+  server.sendHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+  server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
+  
   Serial.println("[OCR] Extract request received");
   
   // This endpoint tells the ESP32-CAM to send its image to Render API
@@ -328,6 +381,11 @@ void handleExtract() {
 
 // GET /enable-motor - Enable motor
 void handleEnableMotor() {
+  // ✅ ADD CORS HEADER HERE
+  server.sendHeader("Access-Control-Allow-Origin", "*");
+  server.sendHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+  server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
+  
   digitalWrite(ENABLE_PIN, LOW);  // LOW = enabled
   motorEnabled = true;
   systemStatus = "Motor Enabled";
@@ -345,6 +403,11 @@ void handleEnableMotor() {
 
 // GET /disable-motor - Disable motor
 void handleDisableMotor() {
+  // ✅ ADD CORS HEADER HERE
+  server.sendHeader("Access-Control-Allow-Origin", "*");
+  server.sendHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+  server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
+  
   digitalWrite(ENABLE_PIN, HIGH);  // HIGH = disabled
   motorEnabled = false;
   systemStatus = "Motor Disabled";
@@ -362,6 +425,11 @@ void handleDisableMotor() {
 
 // GET /ping - Simple ping test
 void handlePing() {
+  // ✅ ADD CORS HEADER HERE
+  server.sendHeader("Access-Control-Allow-Origin", "*");
+  server.sendHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+  server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
+  
   DynamicJsonDocument doc(128);
   doc["success"] = true;
   doc["message"] = "pong";
@@ -445,7 +513,7 @@ void printSystemInfo() {
   Serial.printf("║ Motor Enabled:    %-32s║\n", motorEnabled ? "Yes" : "No");
   Serial.printf("║ Status:           %-32s║\n", systemStatus.c_str());
   Serial.println("╠════════════════════════════════════════════════════╣");
-  Serial.println("║ API ENDPOINTS:                                    ║");
+  Serial.println("║ API ENDPOINTS (All with CORS):                    ║");
   Serial.println("║ GET /status           - Get motor status          ║");
   Serial.println("║ GET /rotate?angle=N   - Rotate to angle N         ║");
   Serial.println("║ GET /capture          - Capture image             ║");
