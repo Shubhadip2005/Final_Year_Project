@@ -1,40 +1,12 @@
-/*
- * ═════════════════════════════════════════════════════════════════════
- * RF ANTENNA AUTOMATION SYSTEM - ESP32-CAM MODULE [FIXED VERSION]
- * ═════════════════════════════════════════════════════════════════════
- * 
- * ✅ FIXES APPLIED:
- * - CORS headers added to ALL endpoints (FIX #1)
- * - Improved error handling and logging
- * - Connection timeout handling
- * 
- * ═════════════════════════════════════════════════════════════════════
- */
-
 #include "esp_camera.h"
 #include <WiFi.h>
-#include <WebServer.h>
-#include <HTTPClient.h>
-#include <ArduinoJson.h>
-
-// ═════════════════════════════════════════════════════════════════════
-// ⚙️ CONFIGURATION
-// ═════════════════════════════════════════════════════════════════════
+#include "esp_http_server.h"
 
 const char* WIFI_SSID = "OPPO Reno10 Pro 5G";
 const char* WIFI_PASSWORD = "12233344445";
 
-// STATIC IP FOR ESP32-CAM
 IPAddress staticIP(10, 135, 98, 51);      
-IPAddress gateway(10, 135, 98, 1);         
 IPAddress subnet(255, 255, 255, 0);
-IPAddress primaryDNS(10, 135, 98, 5);
-IPAddress secondaryDNS(8, 8, 8, 8);
-const char* OCR_API_URL = "https://antenna-ocr-api.onrender.com/extract-ocr";
-
-// ═════════════════════════════════════════════════════════════════════
-// 📷 CAMERA PIN CONFIGURATION (AI THINKER ESP32-CAM)
-// ═════════════════════════════════════════════════════════════════════
 
 #define PWDN_GPIO_NUM     32
 #define RESET_GPIO_NUM    -1
@@ -53,62 +25,164 @@ const char* OCR_API_URL = "https://antenna-ocr-api.onrender.com/extract-ocr";
 #define HREF_GPIO_NUM     23
 #define PCLK_GPIO_NUM     22
 
-// ═════════════════════════════════════════════════════════════════════
-// 🖥️ WEB SERVER
-// ═════════════════════════════════════════════════════════════════════
+httpd_handle_t api_httpd = NULL;
+httpd_handle_t stream_httpd = NULL;
+volatile bool isExtracting = false; 
 
-WebServer server(80);
+// --- RESTORED DASHBOARD HTML ---
+static const char PROGMEM INDEX_HTML[] = R"rawliteral(
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Camera Alignment</title>
+  <style>
+    body { font-family: sans-serif; background: #121212; color: #fff; text-align: center; margin: 20px; }
+    .stream-container { position: relative; display: inline-block; border: 3px solid #333; }
+    img { max-width: 640px; width: 100%; display: block; }
+    .overlay-box { position: absolute; top: 25%; left: 15%; width: 70%; height: 50%; border: 2px dashed #00f2fe; pointer-events: none; }
+  </style>
+</head>
+<body>
+  <h2>📡 Meter Alignment Stream</h2>
+  <div class="stream-container">
+    <img id="stream-img" alt="Live Stream">
+    <div class="overlay-box"></div>
+  </div>
+  <p>Align the numbers inside the dashed box. Ensure there is NO glare.</p>
+  <script>
+    window.onload = function() {
+      document.getElementById('stream-img').src = "http://" + window.location.hostname + ":81/stream";
+    }
+  </script>
+</body>
+</html>
+)rawliteral";
 
-// ═════════════════════════════════════════════════════════════════════
-// 📊 STATE
-// ═════════════════════════════════════════════════════════════════════
+void set_cors_headers(httpd_req_t *req) {
+  httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+  httpd_resp_set_hdr(req, "Access-Control-Allow-Methods", "GET, OPTIONS");
+  httpd_resp_set_hdr(req, "Access-Control-Allow-Headers", "Content-Type");
+}
 
-String systemStatus = "Initializing";
-float lastExtractedValue = 0.0;
+static esp_err_t options_handler(httpd_req_t *req) {
+  set_cors_headers(req);
+  httpd_resp_set_status(req, "200 OK");
+  return httpd_resp_send(req, "", 0);
+}
 
-// ═════════════════════════════════════════════════════════════════════
-// 🎯 SETUP
-// ═════════════════════════════════════════════════════════════════════
+static esp_err_t index_handler(httpd_req_t *req) {
+  httpd_resp_set_type(req, "text/html");
+  return httpd_resp_send(req, INDEX_HTML, HTTPD_RESP_USE_STRLEN);
+}
+
+static esp_err_t ping_handler(httpd_req_t *req) {
+  set_cors_headers(req);
+  httpd_resp_set_type(req, "application/json");
+  return httpd_resp_send(req, "{\"success\":true,\"message\":\"pong\"}", HTTPD_RESP_USE_STRLEN);
+}
+
+static esp_err_t status_handler(httpd_req_t *req) {
+  set_cors_headers(req);
+  httpd_resp_set_type(req, "application/json");
+  return httpd_resp_send(req, "{\"status\":\"Ready\",\"ip\":\"10.135.98.51\"}", HTTPD_RESP_USE_STRLEN);
+}
+
+static esp_err_t capture_handler(httpd_req_t *req) {
+  set_cors_headers(req);
+  isExtracting = true; 
+  vTaskDelay(pdMS_TO_TICKS(150)); 
+  
+  camera_fb_t * fb = esp_camera_fb_get();
+  if (!fb) {
+    isExtracting = false;
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_send(req, "{\"error\":\"Capture failed\"}", HTTPD_RESP_USE_STRLEN);
+  }
+
+  uint8_t * _jpg_buf = NULL;
+  size_t _jpg_buf_len = 0;
+  bool converted = false;
+
+  if (fb->format != PIXFORMAT_JPEG) {
+    converted = fmt2jpg(fb->buf, fb->len, fb->width, fb->height, fb->format, 80, &_jpg_buf, &_jpg_buf_len);
+    esp_camera_fb_return(fb);
+    fb = NULL;
+    if (!converted) {
+      isExtracting = false;
+      httpd_resp_set_type(req, "application/json");
+      return httpd_resp_send(req, "{\"error\":\"JPEG conversion failed\"}", HTTPD_RESP_USE_STRLEN);
+    }
+  } else {
+    _jpg_buf = fb->buf;
+    _jpg_buf_len = fb->len;
+  }
+
+  httpd_resp_set_type(req, "image/jpeg");
+  esp_err_t res = httpd_resp_send(req, (const char *)_jpg_buf, _jpg_buf_len);
+
+  if (converted && _jpg_buf) free(_jpg_buf);
+  else if (fb) esp_camera_fb_return(fb);
+
+  isExtracting = false;
+  return res;
+}
+
+static esp_err_t stream_handler(httpd_req_t *req) {
+  camera_fb_t * fb = NULL;
+  esp_err_t res = ESP_OK;
+  char part_buf[64];
+
+  res = httpd_resp_set_type(req, "multipart/x-mixed-replace;boundary=123456789000000000000987654321");
+  if (res != ESP_OK) return res;
+
+  while (true) {
+    if (isExtracting) {
+      vTaskDelay(pdMS_TO_TICKS(100)); 
+      continue;
+    }
+
+    fb = esp_camera_fb_get();
+    if (!fb) {
+      vTaskDelay(pdMS_TO_TICKS(20));
+      continue;
+    }
+
+    uint8_t * _jpg_buf = NULL;
+    size_t _jpg_buf_len = 0;
+    bool converted = false;
+
+    if (fb->format != PIXFORMAT_JPEG) {
+      converted = fmt2jpg(fb->buf, fb->len, fb->width, fb->height, fb->format, 65, &_jpg_buf, &_jpg_buf_len);
+      esp_camera_fb_return(fb);
+      fb = NULL;
+      if (!converted) {
+        vTaskDelay(pdMS_TO_TICKS(20));
+        continue;
+      }
+    } else {
+      _jpg_buf = fb->buf;
+      _jpg_buf_len = fb->len;
+    }
+
+    size_t hlen = snprintf(part_buf, 64, "Content-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n", _jpg_buf_len);
+    res = httpd_resp_send_chunk(req, part_buf, hlen);
+    if (res == ESP_OK) res = httpd_resp_send_chunk(req, (const char *)_jpg_buf, _jpg_buf_len);
+    if (res == ESP_OK) res = httpd_resp_send_chunk(req, "\r\n--123456789000000000000987654321\r\n", 37);
+
+    if (converted && _jpg_buf) free(_jpg_buf);
+    else if (fb) esp_camera_fb_return(fb);
+
+    if (res != ESP_OK) break;
+    vTaskDelay(pdMS_TO_TICKS(40)); 
+  }
+  return res;
+}
 
 void setup() {
   Serial.begin(115200);
-  delay(2000);
-  
-  Serial.println("\n\n╔════════════════════════════════════════════════════╗");
-  Serial.println("║  📷 ESP32-CAM MODULE - FIXED VERSION              ║");
-  Serial.println("║  (CORS enabled - All endpoints accessible)       ║");
-  Serial.println("╚════════════════════════════════════════════════════╝\n");
-  
-  // Initialize Camera
-  initializeCamera();
-  
-  // Connect WiFi with Static IP
-  connectToWiFi();
-  
-  // Setup Web Server endpoints
-  setupWebServer();
-  
-  server.begin();
-  Serial.println("[SERVER] ✓ Camera API server started on port 80");
-  Serial.println("[SYSTEM] Ready to capture and extract!\n");
-}
+  delay(1000);
 
-// ═════════════════════════════════════════════════════════════════════
-// 🔄 MAIN LOOP
-// ═════════════════════════════════════════════════════════════════════
-
-void loop() {
-  server.handleClient();
-  delay(1);
-}
-
-// ═════════════════════════════════════════════════════════════════════
-// 📷 CAMERA INITIALIZATION
-// ═════════════════════════════════════════════════════════════════════
-
-void initializeCamera() {
-  Serial.println("[CAMERA] Initializing ESP32-CAM...");
-  
   camera_config_t config;
   config.ledc_channel = LEDC_CHANNEL_0;
   config.ledc_timer = LEDC_TIMER_0;
@@ -128,249 +202,65 @@ void initializeCamera() {
   config.pin_sscb_scl = SIOC_GPIO_NUM;
   config.pin_pwdn = PWDN_GPIO_NUM;
   config.pin_reset = RESET_GPIO_NUM;
-  config.xclk_freq_hz = 20000000;         // 20 MHz
-  config.pixel_format = PIXFORMAT_JPEG;
-  config.frame_size = FRAMESIZE_VGA;      // 640x480
-  config.jpeg_quality = 12;               // Good quality
-  config.fb_count = 1;
-  
-  Serial.println("[CAMERA] Calling esp_camera_init()...");
-  
-  esp_err_t err = esp_camera_init(&config);
-  
-  if (err != ESP_OK) {
-    Serial.printf("[CAMERA] ✗ Init failed with error 0x%x\n", err);
-    systemStatus = "Camera Init Failed";
-    return;
-  }
-  
-  Serial.println("[CAMERA] ✓ Initialized successfully!");
-  systemStatus = "Ready";
-}
 
-// ═════════════════════════════════════════════════════════════════════
-// 📡 WIFI CONNECTION WITH STATIC IP
-// ═════════════════════════════════════════════════════════════════════
+  config.xclk_freq_hz = 10000000;
+  config.pixel_format = PIXFORMAT_RGB565; 
+  config.frame_size = FRAMESIZE_VGA;      
+  config.grab_mode = CAMERA_GRAB_LATEST;
+  config.fb_count = 2;                    
+  config.fb_location = CAMERA_FB_IN_PSRAM;
 
-void connectToWiFi() {
-  Serial.println("[WIFI] Configuring static IP...");
-  Serial.println("[WIFI] Static IP: 10.135.98.51 (ALWAYS the same!)");
-  
-  if (!WiFi.config(staticIP, gateway, subnet, primaryDNS, secondaryDNS)) {
-    Serial.println("[WIFI] ✗ Failed to configure static IP");
+  if (esp_camera_init(&config) != ESP_OK) {
+    Serial.println("[CAMERA] Init Failed!");
+    while (true) delay(1000);
   }
-  
-  Serial.println("[WIFI] Connecting to WiFi...");
-  Serial.printf("[WIFI] SSID: %s\n", WIFI_SSID);
-  
+
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  
-  int attempts = 0;
-  while (WiFi.status() != WL_CONNECTED && attempts < 30) {
+  while (WiFi.status() != WL_CONNECTED) {
     delay(500);
-    Serial.print(".");
-    attempts++;
   }
   
-  Serial.println();
+  IPAddress realGateway = WiFi.gatewayIP();
+  IPAddress realDNS = WiFi.dnsIP();
+  WiFi.config(staticIP, realGateway, subnet, realDNS, IPAddress(8,8,8,8));
+
+  // --- RESTORED ROUTING (12 Handlers max) ---
+  httpd_config_t config_api = HTTPD_DEFAULT_CONFIG();
+  config_api.server_port = 80;
+  config_api.ctrl_port = 32768;
+  config_api.max_uri_handlers = 12; 
+
+  httpd_uri_t uri_index   = { .uri = "/",        .method = HTTP_GET, .handler = index_handler,   .user_ctx = NULL };
+  httpd_uri_t uri_ping    = { .uri = "/ping",    .method = HTTP_GET, .handler = ping_handler,    .user_ctx = NULL };
+  httpd_uri_t uri_status  = { .uri = "/status",  .method = HTTP_GET, .handler = status_handler,  .user_ctx = NULL };
+  httpd_uri_t uri_capture = { .uri = "/capture", .method = HTTP_GET, .handler = capture_handler, .user_ctx = NULL };
   
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("[WIFI] ✓ Connected!");
-    Serial.print("[WIFI] IP Address: ");
-    Serial.println(WiFi.localIP());
-    Serial.println("[WIFI] ⭐ IP is ALWAYS 10.135.98.51");
-    Serial.println("[WIFI] ⭐ No need to check Serial Monitor!");
-    systemStatus = "Connected";
-  } else {
-    Serial.println("[WIFI] ✗ Connection failed");
-    systemStatus = "WiFi Failed";
+  httpd_uri_t opt_ping    = { .uri = "/ping",    .method = HTTP_OPTIONS, .handler = options_handler, .user_ctx = NULL };
+  httpd_uri_t opt_status  = { .uri = "/status",  .method = HTTP_OPTIONS, .handler = options_handler, .user_ctx = NULL };
+  httpd_uri_t opt_capture = { .uri = "/capture", .method = HTTP_OPTIONS, .handler = options_handler, .user_ctx = NULL };
+
+  if (httpd_start(&api_httpd, &config_api) == ESP_OK) {
+    httpd_register_uri_handler(api_httpd, &uri_index);
+    httpd_register_uri_handler(api_httpd, &uri_ping);
+    httpd_register_uri_handler(api_httpd, &opt_ping);
+    httpd_register_uri_handler(api_httpd, &uri_status);
+    httpd_register_uri_handler(api_httpd, &opt_status);
+    httpd_register_uri_handler(api_httpd, &uri_capture);
+    httpd_register_uri_handler(api_httpd, &opt_capture);
   }
-  Serial.println();
-}
 
-// ═════════════════════════════════════════════════════════════════════
-// ✅ FIX #1: HELPER FUNCTION TO ADD CORS HEADERS
-// ═════════════════════════════════════════════════════════════════════
+  httpd_config_t config_stream = HTTPD_DEFAULT_CONFIG();
+  config_stream.server_port = 81;
+  config_stream.ctrl_port = 32769;
 
-void addCORSHeaders() {
-  server.sendHeader("Access-Control-Allow-Origin", "*");
-  server.sendHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
-  server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
-}
+  httpd_uri_t uri_stream = { .uri = "/stream", .method = HTTP_GET, .handler = stream_handler, .user_ctx = NULL };
 
-// ═════════════════════════════════════════════════════════════════════
-// 🌐 WEB SERVER SETUP
-// ═════════════════════════════════════════════════════════════════════
-
-void setupWebServer() {
-  Serial.println("[SERVER] Setting up endpoints with CORS...");
-  
-  server.on("/status", HTTP_GET, handleStatus);
-  server.on("/capture", HTTP_GET, handleCapture);
-  server.on("/extract", HTTP_GET, handleExtract);
-  server.on("/ping", HTTP_GET, handlePing);
-  
-  // Handle CORS preflight requests
-  server.on("/status", HTTP_OPTIONS, []() { 
-    addCORSHeaders();
-    server.send(200);
-  });
-  server.on("/capture", HTTP_OPTIONS, []() { 
-    addCORSHeaders();
-    server.send(200);
-  });
-  server.on("/extract", HTTP_OPTIONS, []() { 
-    addCORSHeaders();
-    server.send(200);
-  });
-  server.on("/ping", HTTP_OPTIONS, []() { 
-    addCORSHeaders();
-    server.send(200);
-  });
-  
-  Serial.println("[SERVER] ✓ Endpoints configured with CORS\n");
-}
-
-// ═════════════════════════════════════════════════════════════════════
-// 📡 API HANDLERS (WITH CORS)
-// ═════════════════════════════════════════════════════════════════════
-
-// ✅ FIX #1: CORS headers added
-void handleStatus() {
-  addCORSHeaders();  // ← FIX: Add CORS
-  
-  DynamicJsonDocument doc(256);
-  doc["success"] = true;
-  doc["status"] = systemStatus;
-  doc["ip_address"] = WiFi.localIP().toString();
-  doc["lastExtractedValue"] = lastExtractedValue;
-  
-  String response;
-  serializeJson(doc, response);
-  server.send(200, "application/json", response);
-  
-  Serial.println("[STATUS] Health check OK");
-}
-
-// ✅ FIX #1: CORS headers added
-void handleCapture() {
-  addCORSHeaders();  // ← FIX: Add CORS
-  
-  Serial.println("[CAMERA] Capture request received");
-  
-  camera_fb_t* fb = esp_camera_fb_get();
-  
-  if (!fb) {
-    Serial.println("[CAMERA] ✗ Capture failed!");
-    DynamicJsonDocument doc(128);
-    doc["success"] = false;
-    doc["error"] = "Failed to capture";
-    String response;
-    serializeJson(doc, response);
-    server.send(500, "application/json", response);
-    return;
+  if (httpd_start(&stream_httpd, &config_stream) == ESP_OK) {
+    httpd_register_uri_handler(stream_httpd, &uri_stream);
   }
-  
-  Serial.printf("[CAMERA] ✓ Captured %d bytes\n", fb->len);
-  
-  DynamicJsonDocument doc(256);
-  doc["success"] = true;
-  doc["message"] = "Image captured";
-  doc["size"] = fb->len;
-  
-  String response;
-  serializeJson(doc, response);
-  server.send(200, "application/json", response);
-  
-  esp_camera_fb_return(fb);
 }
 
-// ✅ FIX #1: CORS headers added
-void handleExtract() {
-  addCORSHeaders();  // ← FIX: Add CORS
-  
-  Serial.println("[OCR] Extract request received");
-  
-  camera_fb_t* fb = esp_camera_fb_get();
-  if (!fb) {
-    Serial.println("[OCR] ✗ No frame available");
-    DynamicJsonDocument doc(128);
-    doc["success"] = false;
-    doc["error"] = "No frame available";
-    String response;
-    serializeJson(doc, response);
-    server.send(500, "application/json", response);
-    return;
-  }
-  
-  Serial.println("[OCR] Sending image to Render API...");
-  
-  HTTPClient http;
-  http.begin(OCR_API_URL);
-  http.addHeader("Content-Type", "image/jpeg");
-  http.setTimeout(15000);  // 15 second timeout
-  
-  int httpCode = http.POST(fb->buf, fb->len);
-  
-  DynamicJsonDocument responseDoc(512);
-  
-  if (httpCode == 200) {
-    String payload = http.getString();
-    deserializeJson(responseDoc, payload);
-    
-    if (responseDoc["success"]) {
-      lastExtractedValue = responseDoc["extractedValue"];
-      
-      DynamicJsonDocument doc(256);
-      doc["success"] = true;
-      doc["extractedValue"] = lastExtractedValue;
-      doc["rawText"] = responseDoc["rawText"];
-      doc["unit"] = "mA";
-      
-      String response;
-      serializeJson(doc, response);
-      server.send(200, "application/json", response);
-      
-      Serial.printf("[OCR] ✓ Extracted: %.4f mA\n", lastExtractedValue);
-    } else {
-      DynamicJsonDocument doc(128);
-      doc["success"] = false;
-      doc["error"] = "OCR failed";
-      String response;
-      serializeJson(doc, response);
-      server.send(500, "application/json", response);
-      Serial.println("[OCR] ✗ OCR extraction failed");
-    }
-  } else {
-    DynamicJsonDocument doc(256);
-    doc["success"] = false;
-    doc["error"] = "API error";
-    doc["http_code"] = httpCode;
-    String response;
-    serializeJson(doc, response);
-    server.send(500, "application/json", response);
-    Serial.printf("[OCR] ✗ HTTP error %d\n", httpCode);
-  }
-  
-  http.end();
-  esp_camera_fb_return(fb);
+void loop() {
+  delay(100);
 }
-
-// ✅ FIX #1: CORS headers added
-void handlePing() {
-  addCORSHeaders();  // ← FIX: Add CORS
-  
-  DynamicJsonDocument doc(128);
-  doc["success"] = true;
-  doc["message"] = "pong";
-  String response;
-  serializeJson(doc, response);
-  server.send(200, "application/json", response);
-  
-  Serial.println("[PING] Ping OK");
-}
-
-// ═════════════════════════════════════════════════════════════════════
-// END OF FIXED CODE
-// ═════════════════════════════════════════════════════════════════════
